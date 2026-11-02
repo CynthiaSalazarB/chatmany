@@ -2,7 +2,7 @@
 // converts them to normalized events, and feeds the engine. A conservative account-wide hourly
 // cap on opening DMs guards the shared rate budget across cron ticks (Section 10).
 
-import { getActiveCampaigns, countEventsGlobal, kvGet, kvSet, now } from "../db";
+import { getActiveCampaigns, countEventsGlobal, getProcessedCommentIds, kvGet, kvSet, now } from "../db";
 import type { Runtime } from "../runtime";
 import { toUnixSeconds } from "../runtime";
 import type { NormalizedComment } from "../types";
@@ -31,13 +31,19 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
   let lastError = "";
   for (const mediaId of mediaIds) {
     let comments;
+    let processed;
     try {
       comments = await rt.client.getComments(mediaId);
+      // One read per media, not one per comment: nearly all of these were handled on an earlier
+      // tick, and the free tier's 10ms CPU budget is per invocation. A comment that slips past this
+      // (a webhook racing the poll) is still caught by the engine's own idempotency check.
+      processed = await getProcessedCommentIds(db, comments.map((c) => c.id));
     } catch (e) {
-      console.warn(`[chatmany] getComments(${mediaId}) failed: ${e instanceof Error ? e.message : e}`);
+      console.warn(`[chatmany] reading comments on ${mediaId} failed: ${e instanceof Error ? e.message : e}`);
       continue;
     }
     for (const c of comments) {
+      if (processed.has(c.id)) continue;
       const igsid = c.from?.id;
       if (!igsid) {
         // Meta's Graph API omits `from.id` for some commenters (permissions/visibility vary by
