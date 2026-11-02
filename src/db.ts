@@ -141,6 +141,15 @@ export async function isCommentProcessed(db: D1Database, commentId: string): Pro
   return row !== null;
 }
 
+/** Which of these comments are already processed, in one query. json_each binds the list as one param. */
+export async function getProcessedCommentIds(db: D1Database, commentIds: string[]): Promise<Set<string>> {
+  const rows = await db
+    .prepare("SELECT comment_id FROM processed_comments WHERE comment_id IN (SELECT value FROM json_each(?))")
+    .bind(JSON.stringify(commentIds))
+    .all<{ comment_id: string }>();
+  return new Set((rows.results ?? []).map((r) => r.comment_id));
+}
+
 export async function markCommentProcessed(
   db: D1Database,
   commentId: string,
